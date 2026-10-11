@@ -45,12 +45,14 @@ create table if not exists auction_items (
   id text primary key,
   sort int not null,
   name text not null,
+  reveal_name text,
   time_sec int not null default 0, -- 0 = no limit
   qty int not null default 0,      -- number of auction rounds
   base int not null default 0,
   inc int not null default 0,
   next_price int not null default 0
 );
+alter table auction_items add column if not exists reveal_name text;
 
 create table if not exists inventory (
   team_id bigint not null references teams(id) on delete cascade,
@@ -96,11 +98,13 @@ create table if not exists auction_history (
   created_at timestamptz not null default now(),
   item_id text,
   name text not null,
+  reveal_name text,
   start_price int not null,
   price int not null,
   team_name text,
   sold boolean not null
 );
+alter table auction_history add column if not exists reveal_name text;
 
 create table if not exists trading_listings (
   id bigint generated always as identity primary key,
@@ -201,7 +205,13 @@ begin
     'baseMs', (s.base_min * 60000)::bigint,
     'mult', s.mult,
     'components', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'base', price, 'soldOut', qty <= 0) order by sort) from shop_components), '[]'),
-    'auctionItems', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name) order by sort) from auction_items), '[]'),
+    'auctionItems', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', id,
+        'name', name,
+        'reveal', case when exists (
+          select 1 from auction_history h where h.item_id = auction_items.id and h.sold
+        ) then reveal_name end
+      ) order by sort) from auction_items), '[]'),
     'tradingListings', coalesce((select jsonb_agg(jsonb_build_object('id', l.id, 'teamId', l.team_id, 'teamName', t.username,
         'itemId', l.item_id, 'qty', l.qty, 'price', l.price, 'createdAt', _ms(l.created_at)) order by l.id)
       from trading_listings l join teams t on t.id = l.team_id where l.status = 'active'), '[]'),
@@ -212,7 +222,8 @@ begin
         'name', a.lot_name, 'start', a.lot_start, 'bid', a.lot_bid, 'leader', a.lot_leader_name,
         'time', a.lot_time, 'endsAt', _ms(a.lot_ends_at), 'remainingMs', a.lot_remaining_ms, 'bids', a.lot_bids,
         'inc', coalesce((select inc from auction_items where id = a.lot_item_id), 0)) end,
-      'recent', coalesce((select jsonb_agg(jsonb_build_object('name', h.name, 'price', h.price, 'team', h.team_name, 'sold', h.sold) order by h.id desc)
+      'recent', coalesce((select jsonb_agg(jsonb_build_object('name', h.name, 'reveal', h.reveal_name,
+                          'price', h.price, 'team', h.team_name, 'sold', h.sold) order by h.id desc)
                           from (select * from auction_history order by id desc limit 6) h), '[]'),
       'lastLot', case when a.last_lot_name is null then null else jsonb_build_object('name', a.last_lot_name,
         'teams', coalesce((select jsonb_agg(jsonb_build_object('team', t.username, 'credits', t.credits) order by t.credits desc)
@@ -456,8 +467,10 @@ language sql stable set search_path = public as $$
     'auction', jsonb_build_object(
       'status', a.status,
       'queue', to_jsonb(a.queue),
-      'items', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'time', time_sec, 'qty', qty, 'base', base, 'inc', inc, 'next', next_price) order by sort) from auction_items), '[]'),
-      'history', coalesce((select jsonb_agg(jsonb_build_object('t', _ms(created_at), 'itemId', item_id, 'name', name, 'start', start_price, 'price', price, 'team', team_name, 'sold', sold) order by id desc) from auction_history), '[]')))
+      'items', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'reveal', reveal_name,
+          'time', time_sec, 'qty', qty, 'base', base, 'inc', inc, 'next', next_price) order by sort) from auction_items), '[]'),
+      'history', coalesce((select jsonb_agg(jsonb_build_object('t', _ms(created_at), 'itemId', item_id,
+          'name', name, 'reveal', reveal_name, 'start', start_price, 'price', price, 'team', team_name, 'sold', sold) order by id desc) from auction_history), '[]')))
   from settings s, auction_state a where s.id = 1 and a.id = 1
 $$;
 
@@ -465,7 +478,7 @@ create or replace function game_admin(p_action text, p_body jsonb) returns jsonb
 language plpgsql set search_path = public, extensions as $$
 declare
   b jsonb := coalesce(p_body, '{}');
-  a auction_state; t teams; x jsonb; n numeric; sold boolean; v_u text; v_p text;
+  a auction_state; t teams; x jsonb; n numeric; sold boolean; v_u text; v_p text; v_reveal text;
 begin
   if p_action = 'state' then return admin_state(); end if;
   perform pg_advisory_xact_lock(4242);
@@ -507,8 +520,13 @@ begin
   elsif p_action = 'auction-generate' then
     if a.status <> 'idle' then raise exception 'Reset the auction before generating a new list'; end if;
     update auction_items set next_price = base where true;
-    update auction_state set queue = coalesce((
-      select array_agg(i.id order by random()) from auction_items i, generate_series(1, i.qty)), '{}') where id = 1;
+    update auction_state set queue =
+      (case when exists (select 1 from auction_items where id = 'a18' and qty > 0)
+        then array['a18']::text[] else '{}'::text[] end)
+      || coalesce((select array_agg(i.id order by random())
+          from auction_items i, generate_series(1, i.qty)
+          where i.id <> 'a18'), '{}')
+      where id = 1;
     if (select cardinality(queue) from auction_state where id = 1) = 0 then
       raise exception 'No component has a quantity above 0';
     end if;
@@ -555,6 +573,7 @@ begin
   elsif p_action = 'auction-resolve' then
     if a.lot_item_id is null or a.status not in ('live', 'paused') then raise exception 'No lot to close'; end if;
     sold := coalesce((b->>'sold')::boolean, false);
+    select reveal_name into v_reveal from auction_items where id = a.lot_item_id;
     if sold then
       if a.lot_leader_id is null or not exists (select 1 from teams where id = a.lot_leader_id) then
         raise exception 'Nobody has bid on this lot';
@@ -562,12 +581,15 @@ begin
       insert into inventory (team_id, item_id, qty) values (a.lot_leader_id, a.lot_item_id, 1)
         on conflict (team_id, item_id) do update set qty = inventory.qty + 1;
       insert into orders (team_id, team_name, item, qty, total, phase)
-        values (a.lot_leader_id, a.lot_leader_name, a.lot_name, 1, a.lot_bid, 'auction');
+        values (a.lot_leader_id, a.lot_leader_name,
+                case when v_reveal is null then a.lot_name else a.lot_name || ' — ' || v_reveal end,
+                1, a.lot_bid, 'auction');
     else
       perform _refund_leader();
     end if;
-    insert into auction_history (item_id, name, start_price, price, team_name, sold)
-      values (a.lot_item_id, a.lot_name, a.lot_start, case when sold then a.lot_bid else 0 end,
+    insert into auction_history (item_id, name, reveal_name, start_price, price, team_name, sold)
+      values (a.lot_item_id, a.lot_name, case when sold then v_reveal end,
+              a.lot_start, case when sold then a.lot_bid else 0 end,
               case when sold then a.lot_leader_name end, sold);
     perform _archive_lot();
     perform _auc_next();
@@ -702,7 +724,28 @@ insert into auction_items (id, sort, name, time_sec, qty, base, inc, next_price)
   ('a14', 14, 'Potentiometer (10k)', 20, 10, 20, 5, 20),
   ('a15', 15, 'Potentiometer (1M)', 20, 10, 20, 5, 20),
   ('a16', 16, 'Chassis Kit', 240, 2, 7000, 100, 7000),
-  ('a17', 17, 'LCD', 100, 0, 0, 100, 0)
+  ('a17', 17, 'LCD', 90, 1, 3000, 100, 3000)
 on conflict do nothing;
+
+-- Mystery contents are service-role/admin data until the corresponding lot is sold.
+insert into auction_items (id, sort, name, reveal_name, time_sec, qty, base, inc, next_price) values
+  ('a18', 18, 'Mystery Box 1', 'Chassis Kit', 90, 1, 3000, 100, 3000),
+  ('a19', 19, 'Mystery Box 2', '₹5,000 game credits (added manually)', 90, 1, 3000, 100, 3000),
+  ('a20', 20, 'Mystery Box 3', '15 LEDs, 2 resistors, jumper wires', 90, 1, 3000, 100, 3000),
+  ('a21', 21, 'Mystery Box 4', '3 resistors, 1 battery snapper, 4 batteries, 1 SG90 servo, ultrasonic sensor, DHT sensor, 2 potentiometers (1k and 1M), 2 buzzers, 1 voltage sensor, 2 IR sensors, 2 switches', 90, 1, 3000, 100, 3000)
+on conflict (id) do update set
+  sort = excluded.sort,
+  name = excluded.name,
+  reveal_name = excluded.reveal_name,
+  time_sec = excluded.time_sec,
+  qty = excluded.qty,
+  base = excluded.base,
+  inc = excluded.inc,
+  next_price = excluded.next_price;
+
+-- Apply the requested LCD settings when upgrading an existing database.
+update auction_items
+set time_sec = 90, qty = 1, base = 3000, inc = 100, next_price = 3000
+where id = 'a17';
 
 select refresh_public_state();

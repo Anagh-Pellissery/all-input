@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import { sb } from './supabase';
+import { getMysteryRevealMessage } from './auction-ui.js';
 
 const fmt = n => '₹' + Number(n).toLocaleString('en-IN');
 const mmss = ms => {
@@ -13,6 +14,17 @@ const Toast = ({ message }) => (
     {message}
   </div>
 );
+
+const MysteryReveal = ({ result }) => {
+  const message = getMysteryRevealMessage(result);
+  if (!message) return null;
+  return (
+    <div className="mystery-reveal" role="status" aria-live="polite">
+      <span className="mystery-reveal-label">Mystery revealed</span>
+      <strong>{message}</strong>
+    </div>
+  );
+};
 
 const Strip = () => (
   <div className="strip">
@@ -167,7 +179,7 @@ const MyKit = ({ pub, me, tok, role, logout }) => {
               <tbody>
                 <tr><th style={{ textAlign: 'left' }}>Component</th><th style={{ textAlign: 'left' }}>Qty</th></tr>
                 {[...pub.components, ...(pub.auctionItems || [])].filter(x => me.inv[x.id]).map(x => (
-                  <tr key={x.id}><td>{x.name}</td><td>{me.inv[x.id]}</td></tr>
+                  <tr key={x.id}><td>{x.reveal ? `${x.name} — ${x.reveal}` : x.name}</td><td>{me.inv[x.id]}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -226,6 +238,7 @@ const TeamAuction = ({ pub, me, api, showToast, tok, role, logout, now }) => {
           <h2 style={{ margin: 0 }}>Live Auction</h2>
           <span className="mono">Credits <b className="red" style={{ fontSize: '18px' }}>{me ? fmt(me.credits) : '…'}</b></span>
         </div>
+        <MysteryReveal result={a?.recent?.[0]} />
         {a?.status === 'done' ? (
           <div className="auc-idle-screen" style={{ flex: 1 }}>
             <img src="/logo-removebg-preview.png" alt="All-in Put" className="auc-idle-logo" />
@@ -493,7 +506,7 @@ const AuctionAdmin = ({ adm, pub, api, load, showToast, now }) => {
               {A.history.length ? A.history.map((h, i) => (
                 <tr key={i}>
                   <td>{new Date(h.t).toLocaleTimeString()}</td>
-                  <td>{h.name}</td>
+                  <td>{h.name}{h.reveal && <div className="mut">Revealed: {h.reveal}</div>}</td>
                   <td>{fmt(h.start)}</td>
                   <td>{h.sold ? <><b>{fmt(h.price)}</b> → {h.team}</> : <span className="mut">unsold</span>}</td>
                 </tr>
@@ -527,6 +540,7 @@ const COMP_IMAGES = {
   'Potentiometer (1M)': '/potentiometer.png',
   'Chassis Kit': '/Chasis kit.png',
   'LCD': '/LCD dislplay.png',
+  'Mystery Box': '/MysteryBox.png',
 };
 const getCompImg = (name) => {
   if (!name) return null;
@@ -651,6 +665,8 @@ const AuctionDisplay = ({ pub, now }) => {
           </div>
         </div>
       </nav>
+
+      <MysteryReveal result={recent[0]} />
 
       {isDone ? (
         <div className="auc-idle-screen">

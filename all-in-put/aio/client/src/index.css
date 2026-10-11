@@ -939,6 +939,35 @@ h2 {
 
 /* team live-auction view: bidding panel + top bidders side by side, stacked on phones */
 .team-auc-grid { grid-template-columns: 1fr 400px; }
+
+.mystery-reveal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 12px 20px;
+  border: 1px solid var(--red);
+  background: rgba(217, 66, 33, 0.12);
+  color: var(--cream);
+  text-align: center;
+}
+
+.mystery-reveal-label {
+  flex-shrink: 0;
+  font-family: 'Space Mono', monospace;
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.auc-disp > .mystery-reveal {
+  margin: 12px 24px;
+}
+
 @media (max-width: 800px) {
   .team-auc-grid { grid-template-columns: 1fr; }
+  .mystery-reveal { align-items: flex-start; flex-direction: column; gap: 6px; }
 }
