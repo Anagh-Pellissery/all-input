@@ -95,3 +95,57 @@ test('team API exposes listing update but no direct trade purchase path', () => 
   assert.doesNotMatch(schema, /create or replace function _trade_buy/i);
   assert.match(schema, /drop function if exists _trade_buy\(bigint,\s*numeric,\s*numeric\)/i);
 });
+
+test('admin trade completion validates listing, buyer, whole quantity, and whole non-negative price', () => {
+  const complete = sqlFunction('_trade_admin_complete');
+
+  assert.ok(complete, '_trade_admin_complete must exist');
+  assert.match(complete, /_trading_open\(\)/i);
+  assert.match(complete, /p_listing_id\s+is\s+null[\s\S]*p_listing_id\s*<>\s*trunc\(p_listing_id\)/i);
+  assert.match(complete, /p_qty\s+is\s+null[\s\S]*p_qty\s*<>\s*trunc\(p_qty\)/i);
+  assert.match(complete, /p_price\s+is\s+null[\s\S]*p_price\s*<\s*0[\s\S]*p_price\s*<>\s*trunc\(p_price\)/i);
+  assert.match(complete, /l\.status\s*<>\s*'active'/i);
+  assert.match(complete, /l\.team_id\s*=\s*p_buyer_id/i);
+  assert.match(complete, /from teams where id\s*=\s*p_buyer_id/i);
+  assert.match(complete, /q\s*>\s*l\.qty/i);
+  assert.match(complete, /seller_owned\s*<\s*q/i);
+  assert.match(complete, /buyer\.credits\s*<\s*cost/i);
+});
+
+test('admin trade completion atomically moves credits and inventory and records partial or final status', () => {
+  const complete = sqlFunction('_trade_admin_complete');
+  const firstMutation = complete.search(/update trading_listings set/i);
+  const lastValidation = complete.search(/buyer\.credits\s*<\s*cost/i);
+
+  assert.ok(lastValidation > 0 && firstMutation > lastValidation, 'all validation must precede mutations');
+  assert.match(complete, /status\s*=\s*case when qty\s*-\s*q\s*=\s*0 then 'sold_out' else 'active' end/i);
+  assert.match(complete, /update teams set credits\s*=\s*credits\s*-\s*cost where id\s*=\s*p_buyer_id/i);
+  assert.match(complete, /update teams set credits\s*=\s*credits\s*\+\s*cost where id\s*=\s*l\.team_id/i);
+  assert.match(complete, /update inventory set qty\s*=\s*qty\s*-\s*q[\s\S]*team_id\s*=\s*l\.team_id/i);
+  assert.match(complete, /insert into inventory \(team_id, item_id, qty\) values \(p_buyer_id, l\.item_id, q\)/i);
+  assert.match(complete, /insert into trading_history[\s\S]*values \(l\.team_id, p_buyer_id, l\.item_id, q, unit_price, cost\)/i);
+});
+
+test('admin state exposes resolvable active listings and completed history', () => {
+  const state = sqlFunction('admin_state');
+
+  assert.match(state, /'tradingListings'/i);
+  assert.match(state, /'sellerId'[\s\S]*'sellerName'[\s\S]*'itemName'[\s\S]*'itemSource'/i);
+  assert.match(state, /jsonb_agg\([\s\S]*?order by l\.id\)/i);
+  assert.match(state, /from trading_listings l[\s\S]*?where l\.status\s*=\s*'active'/i);
+  assert.match(state, /'tradingHistory'/i);
+  assert.match(state, /'buyerId'[\s\S]*'buyerName'/i);
+});
+
+test('trade completion is reachable only through the locked admin dispatcher', () => {
+  const admin = sqlFunction('game_admin');
+  const team = sqlFunction('game_team');
+
+  assert.match(admin, /pg_advisory_xact_lock\(4242\)/i);
+  assert.match(admin, /p_action\s*=\s*'trade-complete'[\s\S]*?_trade_admin_complete\(/i);
+  for (const field of ['listingId', 'buyerId', 'qty', 'price']) {
+    assert.match(admin, new RegExp(`b->'${field}'`, 'i'), `admin action must read ${field}`);
+  }
+  assert.doesNotMatch(team, /trade-complete|_trade_admin_complete/i);
+  assert.doesNotMatch(api, /['"]trade\/complete['"]/i);
+});

@@ -462,6 +462,49 @@ begin
   update trading_listings set status = 'cancelled' where id = l.id;
 end $$;
 
+create or replace function _trade_admin_complete(p_listing_id numeric, p_buyer_id bigint, p_qty numeric, p_price numeric) returns void
+language plpgsql set search_path = public as $$
+declare
+  l trading_listings;
+  buyer teams;
+  q int;
+  unit_price int;
+  cost bigint;
+  seller_owned int;
+begin
+  if not _trading_open() then raise exception 'Trading opens after the auction ends'; end if;
+  if p_listing_id is null or p_listing_id < 1 or p_listing_id <> trunc(p_listing_id) then raise exception 'Listing not found'; end if;
+  if p_qty is null or p_qty < 1 or p_qty > 100000 or p_qty <> trunc(p_qty) then raise exception 'Invalid quantity'; end if;
+  if p_price is null or p_price < 0 or p_price > 1000000000 or p_price <> trunc(p_price) then raise exception 'Invalid price'; end if;
+  if p_buyer_id is null or p_buyer_id < 1 then raise exception 'Buyer not found'; end if;
+
+  q := p_qty::int;
+  unit_price := p_price::int;
+  select * into l from trading_listings where id = p_listing_id for update;
+  if not found then raise exception 'Listing not found'; end if;
+  if l.status <> 'active' then raise exception 'Listing is not active'; end if;
+  if l.team_id = p_buyer_id then raise exception 'Seller cannot be the buyer'; end if;
+  select * into buyer from teams where id = p_buyer_id;
+  if not found then raise exception 'Buyer not found'; end if;
+  if q > l.qty then raise exception 'Only % left in this listing', l.qty; end if;
+  select coalesce((select qty from inventory where team_id = l.team_id and item_id = l.item_id), 0) into seller_owned;
+  if seller_owned < q then raise exception 'Seller no longer has enough inventory'; end if;
+  cost := q::bigint * unit_price::bigint;
+  if buyer.credits < cost then raise exception 'Buyer does not have enough credits'; end if;
+
+  update trading_listings set qty = qty - q,
+    status = case when qty - q = 0 then 'sold_out' else 'active' end
+    where id = l.id;
+  update teams set credits = credits - cost where id = p_buyer_id;
+  update teams set credits = credits + cost where id = l.team_id;
+  update inventory set qty = qty - q where team_id = l.team_id and item_id = l.item_id;
+  delete from inventory where team_id = l.team_id and item_id = l.item_id and qty <= 0;
+  insert into inventory (team_id, item_id, qty) values (p_buyer_id, l.item_id, q)
+    on conflict (team_id, item_id) do update set qty = inventory.qty + excluded.qty;
+  insert into trading_history (seller_id, buyer_id, item_id, qty, price, total)
+    values (l.team_id, p_buyer_id, l.item_id, q, unit_price, cost);
+end $$;
+
 drop function if exists _trade_buy(bigint, numeric, numeric);
 
 -- ---------------------------------------------------------------- API entry points
@@ -524,9 +567,20 @@ language sql stable set search_path = public as $$
     'phase', game_phase(),
     'now', _ms(clock_timestamp()),
     'components', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'name', name, 'qty', qty, 'price', price) order by sort) from shop_components), '[]'),
-    'teams', coalesce((select jsonb_agg(jsonb_build_object('u', t.username, 'credits', t.credits,
+    'teams', coalesce((select jsonb_agg(jsonb_build_object('id', t.id, 'u', t.username, 'credits', t.credits,
         'inv', coalesce((select jsonb_object_agg(i.item_id, i.qty) from inventory i where i.team_id = t.id and i.qty > 0), '{}')) order by t.id)
       from teams t), '[]'),
+    'tradingListings', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', l.id, 'sellerId', l.team_id, 'sellerName', seller.username,
+        'itemId', l.item_id, 'itemName', _trade_item_name(l.item_id), 'itemSource', _trade_item_source(l.item_id),
+        'qty', l.qty, 'createdAt', _ms(l.created_at)) order by l.id)
+      from trading_listings l join teams seller on seller.id = l.team_id where l.status = 'active'), '[]'),
+    'tradingHistory', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', h.id, 'sellerId', h.seller_id, 'sellerName', seller.username,
+        'buyerId', h.buyer_id, 'buyerName', buyer.username,
+        'itemId', h.item_id, 'itemName', _trade_item_name(h.item_id), 'itemSource', _trade_item_source(h.item_id),
+        'qty', h.qty, 'price', h.price, 'total', h.total, 'createdAt', _ms(h.created_at)) order by h.id desc)
+      from trading_history h join teams seller on seller.id = h.seller_id join teams buyer on buyer.id = h.buyer_id), '[]'),
     'orders', coalesce((select jsonb_agg(jsonb_build_object('t', _ms(o.created_at), 'team', o.team_name, 'item', o.item, 'qty', o.qty, 'total', o.total, 'phase', o.phase) order by o.id desc)
       from (select * from orders order by id desc limit 2000) o), '[]'),
     'auction', jsonb_build_object(
@@ -675,6 +729,11 @@ begin
     perform _clear_lot('done');
     update auction_state set queue = '{}' where id = 1;
 
+  elsif p_action = 'trade-complete' then
+    n := _num(b->'buyerId');
+    if n is null or n < 1 or n <> trunc(n) then raise exception 'Buyer not found'; end if;
+    perform _trade_admin_complete(_num(b->'listingId'), n::bigint, _num(b->'qty'), _num(b->'price'));
+
   elsif p_action = 'team-add' then
     v_u := trim(coalesce(b->>'u', ''));
     v_p := coalesce(b->>'p', '');
@@ -747,7 +806,7 @@ declare f record;
 begin
   for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
     where ns.nspname = 'public' and p.proname in ('_ms', 'server_now', '_num', 'game_phase', 'refresh_public_state',
-      '_clear_lot', '_archive_lot', '_refund_leader', '_auc_next', '_bid', '_buy', '_reset_auction', '_trade_item_exists', '_trade_item_name', '_trade_item_source', '_trading_open', '_trade_sell', '_trade_update', '_trade_cancel', 'game_login', 'game_me',
+      '_clear_lot', '_archive_lot', '_refund_leader', '_auc_next', '_bid', '_buy', '_reset_auction', '_trade_item_exists', '_trade_item_name', '_trade_item_source', '_trading_open', '_trade_sell', '_trade_update', '_trade_cancel', '_trade_admin_complete', 'game_login', 'game_me',
       'game_team', 'admin_state', 'game_admin')
   loop
     execute format('revoke execute on function %s from public, anon, authenticated', f.sig);
