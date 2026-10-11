@@ -1,5 +1,5 @@
 -- All-in Put — Supabase schema.
--- Run once in Supabase Dashboard → SQL Editor. Safe to re-run (it never deletes data).
+-- Run once in Supabase Dashboard → SQL Editor. Safe to re-run; saved admin auction settings are preserved.
 --
 -- Security model:
 --   * Every table has RLS on and NO policies for anon/authenticated, so the browser
@@ -338,6 +338,8 @@ begin
       when 'c2' then 2
       when 'c7' then 10
       when 'c8' then 1
+      when 'c9' then 2
+      when 'c10' then 2
     end;
     v_limit_name := c.name;
     select coalesce(sum(qty), 0)::int into v_owned
@@ -735,7 +737,9 @@ insert into shop_components (id, sort, name, qty, price, default_qty) values
   ('c5', 5, '3k3 resistor', 100, 10, 100),
   ('c6', 6, '220 resistor', 100, 10, 100),
   ('c7', 7, 'LED', 300, 10, 300),
-  ('c8', 8, 'Power supply', 10, 1000, 10)
+  ('c8', 8, 'Power supply', 10, 1000, 10),
+  ('c9', 9, 'Pushbutton', 16, 20, 16),
+  ('c10', 10, 'Switch', 10, 20, 10)
 on conflict do nothing;
 
 -- Keep the corrected label when this idempotent schema is re-run on an existing event database.
@@ -754,7 +758,6 @@ insert into auction_items (id, sort, name, time_sec, qty, base, inc, next_price)
   ('a10', 10, 'SG90 Servo', 80, 6, 1000, 50, 1000),
   ('a11', 11, 'MG90 Servo', 150, 4, 1500, 50, 1500),
   ('a12', 12, 'DHT', 40, 5, 100, 10, 100),
-  ('a13', 13, 'LED', 0, 1, 3000, 0, 3000),
   ('a14', 14, 'Potentiometer (10k)', 20, 10, 20, 5, 20),
   ('a15', 15, 'Potentiometer (1M)', 20, 10, 20, 5, 20),
   ('a16', 16, 'Chassis Kit', 240, 2, 7000, 100, 7000),
@@ -770,16 +773,10 @@ insert into auction_items (id, sort, name, reveal_name, time_sec, qty, base, inc
 on conflict (id) do update set
   sort = excluded.sort,
   name = excluded.name,
-  reveal_name = excluded.reveal_name,
-  time_sec = excluded.time_sec,
-  qty = excluded.qty,
-  base = excluded.base,
-  inc = excluded.inc,
-  next_price = excluded.next_price;
+  reveal_name = excluded.reveal_name;
 
--- Apply the requested LCD settings when upgrading an existing database.
-update auction_items
-set time_sec = 90, qty = 1, base = 3000, inc = 100, next_price = 3000
-where id = 'a17';
+-- Retire the standalone auction LED while keeping the separate shop LED component.
+update auction_state set queue = array_remove(queue, 'a13') where id = 1;
+delete from auction_items where id = 'a13';
 
 select refresh_public_state();

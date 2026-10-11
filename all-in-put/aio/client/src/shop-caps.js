@@ -1,5 +1,5 @@
 const RESISTOR_IDS = ['c3', 'c4', 'c5', 'c6'];
-const INDIVIDUAL_CAPS = { c1: 2, c2: 2, c7: 10, c8: 1 };
+const INDIVIDUAL_CAPS = { c1: 2, c2: 2, c7: 10, c8: 1, c9: 2, c10: 2 };
 
 export const isResistorShopItem = itemId => RESISTOR_IDS.includes(itemId);
 

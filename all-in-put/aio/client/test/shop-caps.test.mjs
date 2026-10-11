@@ -19,6 +19,8 @@ test('individual shop caps use the quantity already owned by the team', () => {
   assert.deepEqual(allowance('c2', { c2: 2 }), { cap: 2, owned: 2, remaining: 0 });
   assert.deepEqual(allowance('c7', { c7: 4 }), { cap: 10, owned: 4, remaining: 6 });
   assert.deepEqual(allowance('c8', {}), { cap: 1, owned: 0, remaining: 1 });
+  assert.deepEqual(allowance('c9', { c9: 1 }), { cap: 2, owned: 1, remaining: 1 });
+  assert.deepEqual(allowance('c10', { c10: 2 }), { cap: 2, owned: 2, remaining: 0 });
 });
 
 test('all resistor types share one combined cap of ten', () => {
@@ -36,6 +38,17 @@ test('the exact remaining quantity is allowed and any larger purchase is blocked
   assert.equal(shopCaps.canBuyShopQuantity('c7', 5, { c7: 6 }), false);
   assert.equal(shopCaps.canBuyShopQuantity('c5', 1, { c3: 4, c4: 3, c5: 2, c6: 1 }), false);
   assert.equal(shopCaps.canBuyShopQuantity('c1', 0, {}), false);
+  assert.equal(shopCaps.canBuyShopQuantity('c9', 2, {}), true);
+  assert.equal(shopCaps.canBuyShopQuantity('c9', 3, {}), false);
+  assert.equal(shopCaps.canBuyShopQuantity('c10', 1, { c10: 1 }), true);
+  assert.equal(shopCaps.canBuyShopQuantity('c10', 2, { c10: 1 }), false);
+});
+
+test('pushbuttons and switches are seeded with the requested stock and price', async () => {
+  const schema = await readFile(new URL('../supabase/schema.sql', import.meta.url), 'utf8');
+
+  assert.match(schema, /\('c9',\s*9,\s*'Pushbutton',\s*16,\s*20,\s*16\)/i);
+  assert.match(schema, /\('c10',\s*10,\s*'Switch',\s*10,\s*20,\s*10\)/i);
 });
 
 test('the database purchase function enforces caps and migrates the jumper-wire label', async () => {
