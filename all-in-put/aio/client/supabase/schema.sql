@@ -129,6 +129,24 @@ create table if not exists trading_history (
   total int not null
 );
 
+-- Trading can reference either catalog. Remove only the legacy, single-column
+-- shop foreign keys; item validity is enforced by the trading functions below.
+do $$
+declare fk record;
+begin
+  for fk in
+    select c.conrelid::regclass as table_name, c.conname
+    from pg_constraint c
+    join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+    where c.contype = 'f'
+      and c.conrelid in ('public.trading_listings'::regclass, 'public.trading_history'::regclass)
+      and array_length(c.conkey, 1) = 1
+      and a.attname = 'item_id'
+  loop
+    execute format('alter table %s drop constraint %I', fk.table_name, fk.conname);
+  end loop;
+end $$;
+
 create table if not exists public_state (
   id int primary key default 1 check (id = 1),
   v bigint not null default 0,
@@ -183,6 +201,29 @@ begin
   return v;
 exception when others then return null;
 end $$;
+
+create or replace function _trade_item_exists(p_item_id text) returns boolean
+language sql stable set search_path = public as $$
+  select exists(select 1 from shop_components where id = p_item_id)
+      or exists(select 1 from auction_items where id = p_item_id)
+$$;
+
+create or replace function _trade_item_name(p_item_id text) returns text
+language sql stable set search_path = public as $$
+  select coalesce(
+    (select name from shop_components where id = p_item_id),
+    (select name from auction_items where id = p_item_id)
+  )
+$$;
+
+create or replace function _trade_item_source(p_item_id text) returns text
+language sql stable set search_path = public as $$
+  select case
+    when exists(select 1 from shop_components where id = p_item_id) then 'shop'
+    when exists(select 1 from auction_items where id = p_item_id) then 'auction'
+    else null
+  end
+$$;
 
 create or replace function game_phase() returns text
 language sql stable set search_path = public as $$
@@ -715,7 +756,7 @@ declare f record;
 begin
   for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace ns on ns.oid = p.pronamespace
     where ns.nspname = 'public' and p.proname in ('_ms', 'server_now', '_num', 'game_phase', 'refresh_public_state',
-      '_clear_lot', '_archive_lot', '_refund_leader', '_auc_next', '_bid', '_buy', '_reset_auction', '_trading_open', '_trade_sell', '_trade_cancel', '_trade_buy', 'game_login', 'game_me',
+      '_clear_lot', '_archive_lot', '_refund_leader', '_auc_next', '_bid', '_buy', '_reset_auction', '_trade_item_exists', '_trade_item_name', '_trade_item_source', '_trading_open', '_trade_sell', '_trade_cancel', '_trade_buy', 'game_login', 'game_me',
       'game_team', 'admin_state', 'game_admin')
   loop
     execute format('revoke execute on function %s from public, anon, authenticated', f.sig);
@@ -777,6 +818,6 @@ on conflict (id) do update set
 
 -- Retire the standalone auction LED while keeping the separate shop LED component.
 update auction_state set queue = array_remove(queue, 'a13') where id = 1;
-delete from auction_items where id = 'a13';
+update auction_items set qty = 0 where id = 'a13';
 
 select refresh_public_state();
