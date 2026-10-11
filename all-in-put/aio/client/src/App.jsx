@@ -882,7 +882,7 @@ const Admin = ({ route, adm, pub, ph, priceOf, api, load, showToast, tok, role, 
 
   return (
     <>
-      <Nav items={[['admin', 'Shop Admin'], ['admin-auction', 'Auction Admin'], ['display', 'Shop display ↗'], ['auction-display', 'Auction display ↗']]} active={isAuction ? 'admin-auction' : 'admin'} tok={tok} role={role} me={me} logout={logout} />
+      <Nav items={[['admin', 'Shop Admin'], ['admin-auction', 'Auction Admin'], ['display', 'Shop display ↗'], ['auction-display', 'Auction display ↗'], ['building-timer', 'Building Timer ↗']]} active={isAuction ? 'admin-auction' : 'admin'} tok={tok} role={role} me={me} logout={logout} />
       <div className="wrap">
         {isAuction ? (
           <>
@@ -1314,6 +1314,164 @@ const TeamTrading = ({ pub, me, setMe, api, showToast, tok, role, logout }) => {
   );
 };
 
+// ─── Building Phase Timer Display ─────────────────────────────────────────
+const BUILDING_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
+const LS_KEY_START = 'buildingTimerStart';
+const LS_KEY_PAUSED = 'buildingTimerPausedAt';
+
+const BuildingTimer = () => {
+  const isAdmin = new URLSearchParams(window.location.search).get('admin') === '1';
+
+  const getInitialState = () => {
+    const start = Number(localStorage.getItem(LS_KEY_START) || 0);
+    const pausedAt = Number(localStorage.getItem(LS_KEY_PAUSED) || 0);
+    return { start, pausedAt };
+  };
+
+  const [{ start, pausedAt }, setTimerState] = useState(getInitialState);
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+
+  const isRunning = start > 0 && pausedAt === 0;
+  const isPaused = start > 0 && pausedAt > 0;
+  const isStopped = start === 0;
+
+  const elapsed = isRunning
+    ? now - start
+    : isPaused
+    ? pausedAt - start
+    : 0;
+
+  const remaining = Math.max(0, BUILDING_DURATION_MS - elapsed);
+  const pct = Math.min(100, (elapsed / BUILDING_DURATION_MS) * 100);
+  const isUp = remaining === 0 && !isStopped;
+
+  const hh = String(Math.floor(remaining / 3600000)).padStart(2, '0');
+  const mm = String(Math.floor((remaining % 3600000) / 60000)).padStart(2, '0');
+  const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+  const timeText = `${hh}:${mm}:${ss}`;
+
+  const startTimer = () => {
+    const s = { start: Date.now(), pausedAt: 0 };
+    localStorage.setItem(LS_KEY_START, s.start);
+    localStorage.removeItem(LS_KEY_PAUSED);
+    setTimerState(s);
+  };
+
+  const pauseResume = () => {
+    if (isRunning) {
+      const pa = Date.now();
+      localStorage.setItem(LS_KEY_PAUSED, pa);
+      setTimerState(prev => ({ ...prev, pausedAt: pa }));
+    } else if (isPaused) {
+      // resume: shift start forward by paused duration
+      const extra = Date.now() - pausedAt;
+      const newStart = start + extra;
+      localStorage.setItem(LS_KEY_START, newStart);
+      localStorage.removeItem(LS_KEY_PAUSED);
+      setTimerState({ start: newStart, pausedAt: 0 });
+    }
+  };
+
+  const resetTimer = () => {
+    localStorage.removeItem(LS_KEY_START);
+    localStorage.removeItem(LS_KEY_PAUSED);
+    setTimerState({ start: 0, pausedAt: 0 });
+  };
+
+  // SVG ring
+  const R = 160, C = 2 * Math.PI * R;
+  const dash = C * (1 - pct / 100);
+  const ringColor = isUp ? '#d94221' : isPaused ? '#9a9985' : '#eeeadd';
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#111110', display: 'flex',
+      flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      fontFamily: "'Space Mono', monospace", color: '#eeeadd', position: 'relative',
+      overflow: 'hidden'
+    }}>
+      {/* Background glow */}
+      <div style={{
+        position: 'absolute', width: '600px', height: '600px', borderRadius: '50%',
+        background: isUp ? 'radial-gradient(circle, rgba(217,66,33,0.15) 0%, transparent 70%)'
+          : isPaused ? 'radial-gradient(circle, rgba(154,153,133,0.1) 0%, transparent 70%)'
+          : 'radial-gradient(circle, rgba(238,234,221,0.06) 0%, transparent 70%)',
+        pointerEvents: 'none', transition: 'background 1s'
+      }} />
+
+      {/* Logo / title */}
+      <div style={{ position: 'absolute', top: '32px', left: '40px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <i className="dot" />
+        <span style={{ fontSize: '18px', letterSpacing: '0.08em', color: '#9a9985' }}>All-in Put</span>
+      </div>
+      <div style={{ position: 'absolute', top: '32px', right: '40px' }}>
+        <span style={{ fontSize: '13px', color: '#9a9985', letterSpacing: '0.1em' }}>// BUILDING PHASE</span>
+      </div>
+
+      {/* Main ring */}
+      <div style={{ position: 'relative', width: 380, height: 380, marginBottom: '32px' }}>
+        <svg width="380" height="380" style={{ transform: 'rotate(-90deg)' }}>
+          <circle cx="190" cy="190" r={R} fill="none" stroke="#222" strokeWidth="10" />
+          <circle cx="190" cy="190" r={R} fill="none"
+            stroke={ringColor} strokeWidth="10" strokeLinecap="round"
+            strokeDasharray={C} strokeDashoffset={isStopped ? C : dash}
+            style={{ transition: 'stroke-dashoffset 0.5s linear, stroke 0.6s' }}
+          />
+        </svg>
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: '6px'
+        }}>
+          <div style={{
+            fontSize: isStopped ? '56px' : '80px', fontWeight: 700,
+            letterSpacing: '-0.04em', lineHeight: 1,
+            color: isUp ? '#d94221' : isPaused ? '#9a9985' : '#eeeadd',
+            transition: 'color 0.5s'
+          }}>
+            {isStopped ? '03:00:00' : timeText}
+          </div>
+          <div style={{ fontSize: '13px', letterSpacing: '0.14em', color: '#9a9985', marginTop: '4px' }}>
+            {isUp ? 'TIME\'S UP' : isPaused ? 'PAUSED' : isStopped ? 'NOT STARTED' : 'REMAINING'}
+          </div>
+        </div>
+      </div>
+
+      {/* Phase label */}
+      <div style={{ fontSize: '13px', letterSpacing: '0.18em', color: '#9a9985', marginBottom: '48px' }}>
+        BUILD TIME · 3 HOURS
+      </div>
+
+      {/* Admin controls — only visible with ?admin=1 */}
+      {isAdmin && (
+        <div style={{
+          display: 'flex', gap: '12px', position: 'absolute', bottom: '40px',
+          left: '50%', transform: 'translateX(-50%)'
+        }}>
+          {isStopped && (
+            <button className="btn r" onClick={startTimer} style={{ minWidth: '120px' }}>▶ Start</button>
+          )}
+          {(isRunning || isPaused) && (
+            <button className="btn o" onClick={pauseResume} style={{ minWidth: '120px' }}>
+              {isRunning ? '⏸ Pause' : '▶ Resume'}
+            </button>
+          )}
+          {!isStopped && (
+            <button className="btn o" onClick={resetTimer}
+              style={{ minWidth: '120px', borderColor: 'var(--red)', color: 'var(--red)' }}>
+              ↺ Reset
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Display = ({ pub, ph, priceOf }) => {
   if (!pub) return null;
   const { p, left } = ph();
@@ -1425,7 +1583,7 @@ export default function App() {
   useEffect(() => {
     if (!tok) return;
     const pages = role === 'admin' ? ['admin', 'admin-auction'] : ['shop', 'kit', 'trade', 'auction'];
-    if (!pages.includes(route) && route !== 'display' && route !== 'auction-display') {
+    if (!pages.includes(route) && route !== 'display' && route !== 'auction-display' && route !== 'building-timer') {
       window.location.hash = role === 'admin' ? '#/admin' : '#/shop';
       return;
     }
@@ -1483,7 +1641,8 @@ export default function App() {
   return (
     <>
       <Toast message={toastMsg} />
-      {route === 'display' ? <Display pub={pub} ph={ph} priceOf={priceOf} /> :
+      {route === 'building-timer' ? <BuildingTimer /> :
+        route === 'display' ? <Display pub={pub} ph={ph} priceOf={priceOf} /> :
         route === 'auction-display' ? <AuctionDisplay pub={pub} now={nowUi} /> :
           (route === 'admin' || route === 'admin-auction') && role === 'admin' ? <Admin route={route} adm={adm} pub={pub} ph={ph} priceOf={priceOf} api={api} load={load} showToast={showToast} tok={tok} role={role} me={me} logout={logout} now={nowUi} /> :
             route === 'shop' && role === 'team' ? <Shop pub={pub} me={me} setMe={setMe} ph={ph} priceOf={priceOf} api={api} showToast={showToast} tok={tok} role={role} logout={logout} /> :
