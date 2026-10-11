@@ -310,13 +310,44 @@ end $$;
 
 create or replace function _buy(p_team bigint, p_id text, p_qty numeric) returns void
 language plpgsql set search_path = public as $$
-declare ph text := game_phase(); c shop_components; t teams; q int; cost int; m numeric;
+declare
+  ph text := game_phase();
+  c shop_components;
+  t teams;
+  q int;
+  cost int;
+  m numeric;
+  v_cap int;
+  v_owned int := 0;
+  v_limit_name text;
 begin
   if ph = 'idle' then raise exception 'The shop opens when the event starts'; end if;
   select * into c from shop_components where id = p_id;
   if not found or p_qty is null or p_qty < 1 or p_qty > 100000 then raise exception 'Invalid order'; end if;
   q := floor(p_qty);
   if c.qty < q then raise exception 'Not enough stock'; end if;
+  if c.id in ('c3', 'c4', 'c5', 'c6') then
+    v_cap := 10;
+    v_limit_name := 'resistors (combined)';
+    select coalesce(sum(qty), 0)::int into v_owned
+    from inventory
+    where team_id = p_team and item_id in ('c3', 'c4', 'c5', 'c6');
+  else
+    v_cap := case c.id
+      when 'c1' then 2
+      when 'c2' then 2
+      when 'c7' then 10
+      when 'c8' then 1
+    end;
+    v_limit_name := c.name;
+    select coalesce(sum(qty), 0)::int into v_owned
+    from inventory
+    where team_id = p_team and item_id = c.id;
+  end if;
+  if v_cap is not null and v_owned + q > v_cap then
+    raise exception 'Team cap exceeded for %: maximum % per team (% remaining)',
+      v_limit_name, v_cap, greatest(0, v_cap - v_owned);
+  end if;
   select mult into m from settings where id = 1;
   cost := round(case when ph = 'double' then c.price * m else c.price end) * q;
   select * into t from teams where id = p_team;
@@ -698,7 +729,7 @@ insert into public_state (id) values (1) on conflict do nothing;
 
 insert into shop_components (id, sort, name, qty, price, default_qty) values
   ('c1', 1, 'Bread board', 20, 200, 20),
-  ('c2', 2, 'Jumper wires (pack of 40)', 24, 30, 24),
+  ('c2', 2, 'Jumper wires 8x each', 24, 30, 24),
   ('c3', 3, '10k resistor', 100, 10, 100),
   ('c4', 4, '1k resistor', 100, 10, 100),
   ('c5', 5, '3k3 resistor', 100, 10, 100),
@@ -706,6 +737,9 @@ insert into shop_components (id, sort, name, qty, price, default_qty) values
   ('c7', 7, 'LED', 300, 10, 300),
   ('c8', 8, 'Power supply', 10, 1000, 10)
 on conflict do nothing;
+
+-- Keep the corrected label when this idempotent schema is re-run on an existing event database.
+update shop_components set name = 'Jumper wires 8x each' where id = 'c2';
 
 insert into auction_items (id, sort, name, time_sec, qty, base, inc, next_price) values
   ('a1', 1, 'Arduino Nano & Cable', 80, 10, 1000, 50, 1000),

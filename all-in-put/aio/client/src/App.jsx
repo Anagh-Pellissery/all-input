@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import { sb } from './supabase';
 import { getMysteryRevealMessage } from './auction-ui.js';
+import { canBuyShopQuantity, getShopAllowance, isResistorShopItem } from './shop-caps.js';
 
 const fmt = n => '₹' + Number(n).toLocaleString('en-IN');
 const mmss = ms => {
@@ -116,6 +117,13 @@ const Shop = ({ pub, me, setMe, ph, priceOf, api, showToast, tok, role, logout }
 
   const buy = async (id, baseQty = 1) => {
     const q = qtys[id] || baseQty;
+    const allowance = getShopAllowance(id, me?.inv);
+    if (!canBuyShopQuantity(id, Number(q), me?.inv)) {
+      showToast(allowance?.remaining
+        ? `Your team can buy only ${allowance.remaining} more`
+        : 'Your team has reached the limit for this item');
+      return;
+    }
     try {
       const data = await api('buy', { id, qty: Number(q) });
       setMe(data);
@@ -144,19 +152,41 @@ const Shop = ({ pub, me, setMe, ph, priceOf, api, showToast, tok, role, logout }
           <span style={{ padding: '14px 0' }} className="mono">Credits <b className="red" style={{ fontSize: '18px' }}>{me ? fmt(me.credits) : '…'}</b></span>
         </div>
         <div className="grid">
-          {pub.components.map(x => (
-            <div className="card" key={x.id}>
-              <h3>{x.name}</h3>
-              <div className="price">{fmt(priceOf(x.base))}</div>
-              <div className="mono mut">per unit</div>
-              <div className="row">
-                <input type="number" min="1" value={qtys[x.id] || 1} onChange={e => setQtys({ ...qtys, [x.id]: e.target.value })} disabled={x.soldOut} />
-                <button className="btn sm buy" disabled={x.soldOut || p === 'idle'} onClick={() => buy(x.id, qtys[x.id] || 1)}>
-                  {x.soldOut ? 'Sold out' : 'Buy'}
-                </button>
+          {pub.components.map(x => {
+            const itemAllowance = getShopAllowance(x.id, me?.inv);
+            const requested = Number(qtys[x.id] || 1);
+            const capReached = itemAllowance?.remaining === 0;
+            const exceedsCap = !canBuyShopQuantity(x.id, requested, me?.inv);
+
+            return (
+              <div className="card" key={x.id}>
+                <h3>{x.name}</h3>
+                <div className="price">{fmt(priceOf(x.base))}</div>
+                <div className="mono mut">per unit</div>
+                {itemAllowance ? (
+                  <div className="mono mut">
+                    {capReached
+                      ? `Team limit reached (${itemAllowance.cap})`
+                      : `${itemAllowance.remaining} of ${itemAllowance.cap} available for your team`}
+                    {isResistorShopItem(x.id) ? ' · shared across all resistor types' : ''}
+                  </div>
+                ) : null}
+                <div className="row">
+                  <input
+                    type="number"
+                    min="1"
+                    max={itemAllowance?.remaining}
+                    value={qtys[x.id] || 1}
+                    onChange={e => setQtys(current => ({ ...current, [x.id]: e.target.value }))}
+                    disabled={x.soldOut || capReached}
+                  />
+                  <button className="btn sm buy" disabled={x.soldOut || p === 'idle' || capReached || exceedsCap} onClick={() => buy(x.id, qtys[x.id] || 1)}>
+                    {x.soldOut ? 'Sold out' : capReached ? 'Limit reached' : 'Buy'}
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>
