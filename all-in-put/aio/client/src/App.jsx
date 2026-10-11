@@ -821,6 +821,144 @@ const AuctionDisplay = ({ pub, now }) => {
   );
 };
 
+// ─── Building Timer Admin Controls ────────────────────────────────────────
+const BuildingTimerAdmin = () => {
+  const BLS_START = 'buildingTimerStart';
+  const BLS_PAUSED = 'buildingTimerPausedAt';
+  const BLS_DUR = 'buildingTimerDurationMs';
+  const DEF_MS = 3 * 60 * 60 * 1000;
+
+  const readState = () => ({
+    start: Number(localStorage.getItem(BLS_START) || 0),
+    pausedAt: Number(localStorage.getItem(BLS_PAUSED) || 0),
+    durationMs: Number(localStorage.getItem(BLS_DUR) || DEF_MS),
+  });
+
+  const [ts, setTs] = useState(readState);
+  const [now, setNow] = useState(Date.now());
+  const [inputH, setInputH] = useState('3');
+  const [inputM, setInputM] = useState('0');
+
+  useEffect(() => {
+    const id = setInterval(() => { setNow(Date.now()); setTs(readState()); }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  const { start, pausedAt, durationMs } = ts;
+  const isRunning = start > 0 && pausedAt === 0;
+  const isPaused = start > 0 && pausedAt > 0;
+  const isStopped = start === 0;
+
+  const elapsed = isRunning ? now - start : isPaused ? pausedAt - start : 0;
+  const remaining = Math.max(0, durationMs - elapsed);
+  const isUp = remaining === 0 && !isStopped;
+
+  const fmt3 = ms => {
+    const h = String(Math.floor(ms / 3600000)).padStart(2, '0');
+    const m = String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0');
+    const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+    return `${h}:${m}:${s}`;
+  };
+
+  const setDuration = () => {
+    const ms = ((Number(inputH) || 0) * 60 + (Number(inputM) || 0)) * 60000;
+    if (ms <= 0) return;
+    localStorage.setItem(BLS_DUR, ms);
+    // reset timer when duration changes
+    localStorage.removeItem(BLS_START);
+    localStorage.removeItem(BLS_PAUSED);
+    setTs({ start: 0, pausedAt: 0, durationMs: ms });
+  };
+
+  const startTimer = () => {
+    const s = Date.now();
+    localStorage.setItem(BLS_START, s);
+    localStorage.removeItem(BLS_PAUSED);
+    setTs(prev => ({ ...prev, start: s, pausedAt: 0 }));
+  };
+
+  const pauseResume = () => {
+    if (isRunning) {
+      const pa = Date.now();
+      localStorage.setItem(BLS_PAUSED, pa);
+      setTs(prev => ({ ...prev, pausedAt: pa }));
+    } else if (isPaused) {
+      const extra = Date.now() - pausedAt;
+      const newStart = start + extra;
+      localStorage.setItem(BLS_START, newStart);
+      localStorage.removeItem(BLS_PAUSED);
+      setTs(prev => ({ ...prev, start: newStart, pausedAt: 0 }));
+    }
+  };
+
+  const resetTimer = () => {
+    if (!window.confirm('Reset the building timer?')) return;
+    localStorage.removeItem(BLS_START);
+    localStorage.removeItem(BLS_PAUSED);
+    setTs(prev => ({ ...prev, start: 0, pausedAt: 0 }));
+  };
+
+  const statusLabel = isUp ? "TIME'S UP" : isPaused ? 'PAUSED' : isRunning ? 'RUNNING' : 'NOT STARTED';
+  const statusColor = isUp ? 'var(--red)' : isPaused ? 'var(--mut)' : isRunning ? 'var(--cream)' : 'var(--mut)';
+
+  return (
+    <div className="panel">
+      <div className="flex" style={{ alignItems: 'flex-start', gap: '24px', flexWrap: 'wrap' }}>
+
+        {/* Current state */}
+        <div style={{ minWidth: '180px' }}>
+          <div className="mono mut" style={{ marginBottom: '8px' }}>// Current state</div>
+          <div className="clock" style={{ fontSize: '48px', color: isUp ? 'var(--red)' : isPaused ? 'var(--mut)' : 'var(--cream)' }}>
+            {isStopped ? fmt3(durationMs) : fmt3(remaining)}
+          </div>
+          <div className="mono" style={{ marginTop: '6px', color: statusColor }}>{statusLabel}</div>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, minWidth: '260px' }}>
+          {/* Duration setter */}
+          <div>
+            <div className="mono mut" style={{ marginBottom: '8px' }}>// Set duration</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--mut)' }}>Hours</span>
+                <input type="number" min="0" max="12" value={inputH} onChange={e => setInputH(e.target.value)} style={{ width: '100px' }} />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100px' }}>
+                <span style={{ fontSize: '12px', color: 'var(--mut)' }}>Minutes</span>
+                <input type="number" min="0" max="59" value={inputM} onChange={e => setInputM(e.target.value)} style={{ width: '100px' }} />
+              </label>
+              <button className="btn o" onClick={setDuration} style={{ alignSelf: 'flex-end' }}>Set &amp; Reset</button>
+            </div>
+          </div>
+
+          {/* Controls */}
+          <div>
+            <div className="mono mut" style={{ marginBottom: '8px' }}>// Controls</div>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              {isStopped && (
+                <button className="btn r" onClick={startTimer}>▶ Start</button>
+              )}
+              {(isRunning || isPaused) && (
+                <button className="btn o" onClick={pauseResume}>
+                  {isRunning ? '⏸ Pause' : '▶ Resume'}
+                </button>
+              )}
+              {!isStopped && (
+                <button className="btn o" onClick={resetTimer} style={{ borderColor: 'var(--red)', color: 'var(--red)' }}>
+                  ↺ Reset
+                </button>
+              )}
+              <a href="#/building-timer" target="_blank" rel="noreferrer" className="btn o" style={{ textDecoration: 'none' }}>
+                Open Display ↗
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Admin = ({ route, adm, pub, ph, priceOf, api, load, showToast, tok, role, me, logout, now }) => {
   const [selectedAdminFilter, setSelectedAdminFilter] = useState('all');
   const [activeModalTeam, setActiveModalTeam] = useState(null);
@@ -913,6 +1051,9 @@ const Admin = ({ route, adm, pub, ph, priceOf, api, load, showToast, tok, role, 
                 <button className="btn o" onClick={() => post('admin/settings', { mult: mu, defaultCredits: dc }, 'Saved')}>Save settings</button>
               </div>
             </div>
+
+            <h2>Building Timer</h2>
+            <BuildingTimerAdmin />
 
             <h2>Inventory &amp; prices</h2>
             <div className="panel">
@@ -1315,159 +1456,76 @@ const TeamTrading = ({ pub, me, setMe, api, showToast, tok, role, logout }) => {
 };
 
 // ─── Building Phase Timer Display ─────────────────────────────────────────
-const BUILDING_DURATION_MS = 3 * 60 * 60 * 1000; // 3 hours
 const LS_KEY_START = 'buildingTimerStart';
 const LS_KEY_PAUSED = 'buildingTimerPausedAt';
+const LS_KEY_DURATION = 'buildingTimerDurationMs';
+const DEFAULT_BUILDING_MS = 3 * 60 * 60 * 1000; // 3 hours default
 
 const BuildingTimer = () => {
-  const isAdmin = new URLSearchParams(window.location.search).get('admin') === '1';
 
-  const getInitialState = () => {
-    const start = Number(localStorage.getItem(LS_KEY_START) || 0);
-    const pausedAt = Number(localStorage.getItem(LS_KEY_PAUSED) || 0);
-    return { start, pausedAt };
-  };
+  const readState = () => ({
+    start: Number(localStorage.getItem(LS_KEY_START) || 0),
+    pausedAt: Number(localStorage.getItem(LS_KEY_PAUSED) || 0),
+    durationMs: Number(localStorage.getItem(LS_KEY_DURATION) || DEFAULT_BUILDING_MS),
+  });
 
-  const [{ start, pausedAt }, setTimerState] = useState(getInitialState);
+  const [timerState, setTimerState] = useState(readState);
   const [now, setNow] = useState(Date.now());
 
+  // Poll localStorage every second so the display screen stays in sync
+  // when the admin controls it from a different tab
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 250);
+    const id = setInterval(() => {
+      setNow(Date.now());
+      setTimerState(readState());
+    }, 500);
     return () => clearInterval(id);
   }, []);
 
+  const { start, pausedAt, durationMs } = timerState;
   const isRunning = start > 0 && pausedAt === 0;
   const isPaused = start > 0 && pausedAt > 0;
   const isStopped = start === 0;
 
-  const elapsed = isRunning
-    ? now - start
-    : isPaused
-    ? pausedAt - start
-    : 0;
-
-  const remaining = Math.max(0, BUILDING_DURATION_MS - elapsed);
-  const pct = Math.min(100, (elapsed / BUILDING_DURATION_MS) * 100);
+  const elapsed = isRunning ? now - start : isPaused ? pausedAt - start : 0;
+  const remaining = Math.max(0, durationMs - elapsed);
   const isUp = remaining === 0 && !isStopped;
 
   const hh = String(Math.floor(remaining / 3600000)).padStart(2, '0');
   const mm = String(Math.floor((remaining % 3600000) / 60000)).padStart(2, '0');
   const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
-  const timeText = `${hh}:${mm}:${ss}`;
 
-  const startTimer = () => {
-    const s = { start: Date.now(), pausedAt: 0 };
-    localStorage.setItem(LS_KEY_START, s.start);
-    localStorage.removeItem(LS_KEY_PAUSED);
-    setTimerState(s);
-  };
+  const defaultHH = String(Math.floor(durationMs / 3600000)).padStart(2, '0');
+  const defaultMM = String(Math.floor((durationMs % 3600000) / 60000)).padStart(2, '0');
+  const defaultSS = String(Math.floor((durationMs % 60000) / 1000)).padStart(2, '0');
+  const timeText = isStopped ? `${defaultHH}:${defaultMM}:${defaultSS}` : `${hh}:${mm}:${ss}`;
 
-  const pauseResume = () => {
-    if (isRunning) {
-      const pa = Date.now();
-      localStorage.setItem(LS_KEY_PAUSED, pa);
-      setTimerState(prev => ({ ...prev, pausedAt: pa }));
-    } else if (isPaused) {
-      // resume: shift start forward by paused duration
-      const extra = Date.now() - pausedAt;
-      const newStart = start + extra;
-      localStorage.setItem(LS_KEY_START, newStart);
-      localStorage.removeItem(LS_KEY_PAUSED);
-      setTimerState({ start: newStart, pausedAt: 0 });
-    }
-  };
-
-  const resetTimer = () => {
-    localStorage.removeItem(LS_KEY_START);
-    localStorage.removeItem(LS_KEY_PAUSED);
-    setTimerState({ start: 0, pausedAt: 0 });
-  };
-
-  // SVG ring
-  const R = 160, C = 2 * Math.PI * R;
-  const dash = C * (1 - pct / 100);
-  const ringColor = isUp ? '#d94221' : isPaused ? '#9a9985' : '#eeeadd';
+  const statusText = isUp ? "TIME'S UP" : isPaused ? 'PAUSED' : isStopped ? 'NOT STARTED' : 'REMAINING';
+  const clockColor = isUp ? 'var(--red)' : isPaused ? 'var(--mut)' : 'var(--cream)';
 
   return (
-    <div style={{
-      minHeight: '100vh', background: '#111110', display: 'flex',
-      flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      fontFamily: "'Space Mono', monospace", color: '#eeeadd', position: 'relative',
-      overflow: 'hidden'
-    }}>
-      {/* Background glow */}
-      <div style={{
-        position: 'absolute', width: '600px', height: '600px', borderRadius: '50%',
-        background: isUp ? 'radial-gradient(circle, rgba(217,66,33,0.15) 0%, transparent 70%)'
-          : isPaused ? 'radial-gradient(circle, rgba(154,153,133,0.1) 0%, transparent 70%)'
-          : 'radial-gradient(circle, rgba(238,234,221,0.06) 0%, transparent 70%)',
-        pointerEvents: 'none', transition: 'background 1s'
-      }} />
+    <div className="auc-disp" style={{ justifyContent: 'space-between' }}>
+      {/* Top bar */}
+      <nav>
+        <div className="brand" style={{ cursor: 'default' }}><i className="dot" />All-in Put</div>
+        <span className="sp" />
+        <span className="mono mut" style={{ border: 0, padding: '0 24px' }}>Building Phase</span>
+      </nav>
 
-      {/* Logo / title */}
-      <div style={{ position: 'absolute', top: '32px', left: '40px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <i className="dot" />
-        <span style={{ fontSize: '18px', letterSpacing: '0.08em', color: '#9a9985' }}>All-in Put</span>
-      </div>
-      <div style={{ position: 'absolute', top: '32px', right: '40px' }}>
-        <span style={{ fontSize: '13px', color: '#9a9985', letterSpacing: '0.1em' }}>// BUILDING PHASE</span>
-      </div>
-
-      {/* Main ring */}
-      <div style={{ position: 'relative', width: 380, height: 380, marginBottom: '32px' }}>
-        <svg width="380" height="380" style={{ transform: 'rotate(-90deg)' }}>
-          <circle cx="190" cy="190" r={R} fill="none" stroke="#222" strokeWidth="10" />
-          <circle cx="190" cy="190" r={R} fill="none"
-            stroke={ringColor} strokeWidth="10" strokeLinecap="round"
-            strokeDasharray={C} strokeDashoffset={isStopped ? C : dash}
-            style={{ transition: 'stroke-dashoffset 0.5s linear, stroke 0.6s' }}
-          />
-        </svg>
-        <div style={{
-          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: '6px'
-        }}>
-          <div style={{
-            fontSize: isStopped ? '56px' : '80px', fontWeight: 700,
-            letterSpacing: '-0.04em', lineHeight: 1,
-            color: isUp ? '#d94221' : isPaused ? '#9a9985' : '#eeeadd',
-            transition: 'color 0.5s'
-          }}>
-            {isStopped ? '03:00:00' : timeText}
-          </div>
-          <div style={{ fontSize: '13px', letterSpacing: '0.14em', color: '#9a9985', marginTop: '4px' }}>
-            {isUp ? 'TIME\'S UP' : isPaused ? 'PAUSED' : isStopped ? 'NOT STARTED' : 'REMAINING'}
-          </div>
+      {/* Centre content — same layout as the idle screens */}
+      <div className="auc-idle-screen" style={{ flex: 1 }}>
+        <img src="/logo-removebg-preview.png" alt="All-in Put" className="auc-idle-logo" />
+        <div className="auc-idle-title">Building Time</div>
+        <div className="clock" style={{ color: clockColor, fontSize: 'clamp(72px, 12vw, 160px)', transition: 'color 0.5s' }}>
+          {timeText}
+        </div>
+        <div className="auc-idle-sub" style={{ color: isUp ? 'var(--red)' : 'var(--mut)' }}>
+          {statusText}
         </div>
       </div>
 
-      {/* Phase label */}
-      <div style={{ fontSize: '13px', letterSpacing: '0.18em', color: '#9a9985', marginBottom: '48px' }}>
-        BUILD TIME · 3 HOURS
-      </div>
-
-      {/* Admin controls — only visible with ?admin=1 */}
-      {isAdmin && (
-        <div style={{
-          display: 'flex', gap: '12px', position: 'absolute', bottom: '40px',
-          left: '50%', transform: 'translateX(-50%)'
-        }}>
-          {isStopped && (
-            <button className="btn r" onClick={startTimer} style={{ minWidth: '120px' }}>▶ Start</button>
-          )}
-          {(isRunning || isPaused) && (
-            <button className="btn o" onClick={pauseResume} style={{ minWidth: '120px' }}>
-              {isRunning ? '⏸ Pause' : '▶ Resume'}
-            </button>
-          )}
-          {!isStopped && (
-            <button className="btn o" onClick={resetTimer}
-              style={{ minWidth: '120px', borderColor: 'var(--red)', color: 'var(--red)' }}>
-              ↺ Reset
-            </button>
-          )}
-        </div>
-      )}
+      {/* Bottom scrolling strip */}
+      <Strip />
     </div>
   );
 };
